@@ -92,4 +92,4 @@ This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.
 This repository ships pre-compiled binaries inside the `patches/` tree to streamline bootstrapping without requiring host package compilation:
 
 * **`apk-tools` (Alpine Package Manager):** Licensed under **GPLv2**. Upstream source code and original build recipes are available at the official Alpine GitLab repository:
-[https://gitlab.alpinelinux.org/alpine/apk-tools](https://www.google.com/search?q=https://gitlab.alpinelinux.org/alpine/apk-tools)
+[https://gitlab.alpinelinux.org/alpine/apk-tools](https://gitlab.alpinelinux.org/alpine/apk-tools)
