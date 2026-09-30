@@ -1,0 +1,15 @@
+Welcome to Alpine-NTFS!
+
+Alpine Linux running directly off an NTFS partition.
+No intermediate loop mounts or rootfs images—just standard initramfs and NTFS.
+
+How it works:
+1) Kernel boots /init from the custom initramfs.
+2) /init loads storage drivers and mounts the NTFS partition via FUSE (ntfs-3g).
+3) The root directory is bind-mounted and handed off via switch_root.
+4) Done! The whole system runs directly on NTFS.
+
+You can install it to a disk using our patched setup-alpine script,
+though using this on a daily-driver production machine is definitely not recommended.
+
+Have fun!

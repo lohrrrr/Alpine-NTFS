@@ -1,0 +1,121 @@
+#!/busybox sh
+
+/busybox --install -s /bin 2>/dev/null || /bin/busybox --install -s /bin 2>/dev/null
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+emergency_shell() {
+    echo ""
+    echo "=========================================================="
+    echo " [!] CRITICAL INIT FAILURE: $1"
+    echo "=========================================================="
+    echo "Dropping into emergency maintenance shell..."
+    echo "Inspect disks with 'blkid' or 'ls -la /dev'."
+    exec /busybox sh </dev/console >/dev/console 2>&1
+}
+
+echo "=================================================="
+echo " Starting Alpine-NTFS"
+echo "=================================================="
+
+echo "[1/5] Mounting core virtual filesystems..."
+/busybox mkdir -p /proc /sys /dev
+/busybox mount -t proc none /proc
+/busybox mount -t sysfs none /sys
+/busybox mount -t devtmpfs none /dev 2>/dev/null || /busybox mount -t tmpfs dev /dev
+
+echo "[2/5] Loading storage drivers..."
+for mod in /lib/modules/*.ko; do
+    [ -f "$mod" ] && /busybox insmod "$mod" 2>/dev/null || true
+done
+if command -v mdev >/dev/null 2>&1; then
+    mdev -s
+fi
+/busybox sleep 1
+
+echo "[3/5] Resolving NTFS root block device..."
+TARGET_ROOT=""
+for param in $(cat /proc/cmdline); do
+    case "$param" in
+        root=*) TARGET_ROOT="${param#root=}" ;;
+    esac
+done
+
+resolve_device() {
+    case "$TARGET_ROOT" in
+        UUID=*)
+            _uuid="${TARGET_ROOT#UUID=}"
+            blkid 2>/dev/null | grep -i "UUID=[\"\']\?${_uuid}[\"\']\?" | cut -d: -f1 | head -n 1
+            ;;
+        LABEL=*)
+            _label="${TARGET_ROOT#LABEL=}"
+            blkid 2>/dev/null | grep -i "LABEL=[\"\']\?${_label}[\"\']\?" | cut -d: -f1 | head -n 1
+            ;;
+        /dev/*)
+            echo "$TARGET_ROOT"
+            ;;
+        *)
+            blkid 2>/dev/null | grep -i 'LABEL="Alpine-NTFS"' | cut -d: -f1 | head -n 1
+            ;;
+    esac
+}
+
+RETRIES=10
+ROOT_DEV=""
+while [ $RETRIES -gt 0 ]; do
+    ROOT_DEV=$(resolve_device)
+    if [ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ]; then
+        break
+    fi
+    echo "  [*] Waiting for disk matching '$TARGET_ROOT' ($RETRIES remaining)..."
+    /busybox sleep 1
+    mdev -s 2>/dev/null || true
+    RETRIES=$((RETRIES - 1))
+done
+
+if [ -z "$ROOT_DEV" ] || [ ! -b "$ROOT_DEV" ]; then
+    for candidate in /dev/vda2 /dev/sda2; do
+        if [ -b "$candidate" ]; then
+            ROOT_DEV="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$ROOT_DEV" ] || [ ! -b "$ROOT_DEV" ]; then
+    blkid
+    emergency_shell "Could not resolve root block device '$TARGET_ROOT'!"
+fi
+
+echo "[+] Target block device: $ROOT_DEV"
+
+echo "[4/5] Mounting NTFS filesystem..."
+/busybox mkdir -p /mnt_raw
+if ! /bin/ntfs-3g -o permissions "$ROOT_DEV" /mnt_raw 2>/dev/null; then
+    if ! mount -t ntfs3 -o rw "$ROOT_DEV" /mnt_raw 2>/dev/null; then
+        emergency_shell "Failed to mount $ROOT_DEV via ntfs-3g or ntfs3!"
+    fi
+fi
+echo "[+] Successfully mounted $ROOT_DEV on /mnt_raw"
+
+echo "[5/5] Preparing target root mountpoint..."
+/busybox mkdir -p /mnt_root
+
+SOURCE_DIR="/mnt_raw/Alpine-NTFS"
+if [ ! -d "$SOURCE_DIR" ]; then
+    SOURCE_DIR="/mnt_raw"
+fi
+
+if ! /busybox mount --bind "$SOURCE_DIR" /mnt_root; then
+    emergency_shell "Failed to bind mount $SOURCE_DIR to /mnt_root!"
+fi
+
+/busybox mkdir -p /mnt_root/proc /mnt_root/sys /mnt_root/dev
+/busybox mount --move /proc /mnt_root/proc
+/busybox mount --move /sys /mnt_root/sys
+/busybox mount --move /dev /mnt_root/dev
+
+echo "[+] Executing switch_root to Alpine /sbin/init..."
+exec /busybox switch_root /mnt_root /sbin/init || {
+    echo "CRITICAL: switch_root failed!"
+    exec /busybox sh
+}

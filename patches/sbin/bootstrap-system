@@ -1,0 +1,88 @@
+#!/bin/sh
+/bin/busybox --install -s /bin 2>/dev/null || /bin/busybox.static --install -s /bin 2>/dev/null || true
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+set -e
+
+echo "=================================================="
+echo " Starting Alpine-NTFS Bootstrap"
+echo "=================================================="
+
+echo "[1/7] Verifying APK repositories..."
+mkdir -p /etc/apk
+if [ ! -s /etc/apk/repositories ]; then
+    cat << 'EOF' > /etc/apk/repositories
+https://dl-cdn.alpinelinux.org/alpine/v3.24/main
+https://dl-cdn.alpinelinux.org/alpine/v3.24/community
+EOF
+fi
+
+echo "[2/7] Installing necessary drivers and tools..."
+apk update
+apk add --no-cache \
+    alpine-baselayout \
+    openrc \
+    busybox-static \
+    ntfs-3g \
+    util-linux \
+    blkid \
+    dhcpcd \
+    openssh-server \
+    openssh-client \
+    openssh-keygen
+
+echo "[3/7] Ensuring base system groups and users exist..."
+getent group uucp >/dev/null 2>&1 || addgroup -g 14 -S uucp 2>/dev/null || true
+getent group dialout >/dev/null 2>&1 || addgroup -g 20 -S dialout 2>/dev/null || true
+getent group disk >/dev/null 2>&1 || addgroup -g 6 -S disk 2>/dev/null || true
+
+getent group sshd >/dev/null 2>&1 || addgroup -S sshd 2>/dev/null || true
+getent passwd sshd >/dev/null 2>&1 || adduser -S -D -H -h /var/empty -s /sbin/nologin -G sshd -g "sshd privsep" sshd 2>/dev/null || true
+mkdir -p /var/empty
+ssh-keygen -A 2>/dev/null || true
+
+echo "[4/7] Setting system hostname to 'alpine-ntfs'..."
+TARGET_HOSTNAME="alpine-ntfs"
+echo "$TARGET_HOSTNAME" > /etc/hostname
+
+if ! grep -q "$TARGET_HOSTNAME" /etc/hosts 2>/dev/null; then
+    printf "\n127.0.1.1\t%s\t%s.localdomain\n" "$TARGET_HOSTNAME" "$TARGET_HOSTNAME" >> /etc/hosts
+fi
+
+echo "[5/7] Configuring basic network loopback..."
+mkdir -p /etc/network
+if [ ! -s /etc/network/interfaces ] || ! grep -q "iface lo inet loopback" /etc/network/interfaces 2>/dev/null; then
+    cat << 'EOF' > /etc/network/interfaces
+auto lo
+iface lo inet loopback
+EOF
+fi
+
+echo "[6/7] Registering OpenRC runlevel services..."
+rc-update del hwdrivers sysinit 2>/dev/null || true
+
+for svc in devfs dmesg mdev; do
+    rc-update add "$svc" sysinit 2>/dev/null || true
+done
+
+for svc in bootmisc hostname syslog networking; do
+    rc-update add "$svc" boot 2>/dev/null || true
+done
+
+for svc in dhcpcd sshd; do
+    rc-update add "$svc" default 2>/dev/null || true
+done
+
+for svc in mount-ro killprocs savecache; do
+    rc-update add "$svc" shutdown 2>/dev/null || true
+done
+
+echo "[7/7] Setting root credentials..."
+echo "root:root" | chpasswd
+
+echo ""
+echo "=================================================="
+echo " [✓] Chroot bootstrap completed."
+echo " Hostname : $(cat /etc/hostname)"
+echo " Login    : root / root"
+echo "=================================================="
